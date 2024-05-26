@@ -1,0 +1,12 @@
+[package]
+name = "ThalaSignedMath"
+version = "1.0.0"
+
+[addresses]
+thala_signed_math = "0xeeef"
+thala_signed_math_deployer = "0xdeed"
+
+[dependencies.MoveStdlib]
+git = "https://github.com/aptos-labs/aptos-core.git"
+subdir = "aptos-move/framework/move-stdlib"
+rev = "mainnet"
