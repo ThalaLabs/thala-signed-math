@@ -3,8 +3,8 @@ name = "ThalaSignedMath"
 version = "1.0.0"
 
 [addresses]
-thala_signed_math = "0xeeef"
-thala_signed_math_deployer = "0xdeed"
+#testnet address
+thala_signed_math = "0x1321d3908cda17e6820a93a89a68fef9507b4a533e25f1ffe7081978e0f8b2fe"
 
 [dependencies.MoveStdlib]
 git = "https://github.com/aptos-labs/aptos-core.git"
