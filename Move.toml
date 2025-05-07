@@ -3,8 +3,7 @@ name = "ThalaSignedMath"
 version = "1.0.0"
 
 [addresses]
-thala_signed_math = "0xeeef"
-thala_signed_math_deployer = "0xdeed"
+thala_signed_math = "0xef90534d9520353a7c877548e4a91d4f18a82322e3770acb07bf664768318112"
 
 [dependencies.MoveStdlib]
 git = "https://github.com/aptos-labs/aptos-framework.git"
