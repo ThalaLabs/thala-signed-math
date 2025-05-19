@@ -7,6 +7,9 @@ module thala_signed_math::i64 {
     /// @dev Maximum I64 value as a u64.
     const MAX_I64_AS_U64: u64 = (1 << 63) - 1;
 
+    /// @dev Maximum U64 value (2^64 - 1), used as the basis of overflow checks
+    const MAX_U64: u64 = 18446744073709551615;
+
     /// @dev u64 with the first bit set. An `I64` is negative if this bit is set.
     const U64_WITH_FIRST_BIT_SET: u64 = 1 << 63;
 
@@ -24,6 +27,19 @@ module thala_signed_math::i64 {
 
     /// @dev When trying to convert from an negative I64 to a u64.
     const ECONVERSION_TO_U64_UNDERFLOW: u64 = 1;
+
+    /// @dev When trying to add a u64 to an I64 that would overflow.
+    const SIGNED_MATH_ADD_OVERFLOW: u64 = 2;
+
+    /// @dev When trying to subtract a u64 from an I64 that would underflow.
+    const SIGNED_MATH_SUB_UNDERFLOW: u64 = 3;
+
+    /// @dev When trying to multiply a u64 by an I64 that would overflow.
+    const SIGNED_MATH_MUL_OVERFLOW: u64 = 4;
+
+    /// @dev When trying to divide by zero.
+    const SIGNED_MATH_DIVIDE_BY_ZERO: u64 = 5;
+
 
     /// @notice Struct representing a signed 64-bit integer.
     struct I64 has copy, drop, store {
@@ -62,17 +78,22 @@ module thala_signed_math::i64 {
         x.bits > U64_WITH_FIRST_BIT_SET
     }
 
+    /// @notice Normalize `x such that "-0" and "0" are both represented by "0".
+    fun normalize(x: I64): I64 {
+        if (x.bits == U64_WITH_FIRST_BIT_SET) I64 { bits: 0 } else x
+    }
+
     /// @notice Flips the sign of `x`.
     public fun neg(x: &I64): I64 {
         if (x.bits == 0) return *x;
-        I64 { bits: if (x.bits < U64_WITH_FIRST_BIT_SET) x.bits | (1 << 63) else x.bits - (1 << 63) }
+        normalize(I64 { bits: if (x.bits < U64_WITH_FIRST_BIT_SET) x.bits | (1 << 63) else x.bits - (1 << 63) })
     }
 
     /// @notice Flips the sign of `x`.
     public fun neg_from_u64(x: u64): I64 {
         let ret = from_u64(x);
         if (ret.bits > 0) *&mut ret.bits = ret.bits | (1 << 63);
-        ret
+        normalize(ret)
     }
 
     /// @notice Absolute value of `x`.
@@ -108,11 +129,18 @@ module thala_signed_math::i64 {
     public fun add(a: &I64, b: u64): I64 {
         if (a.bits >> 63 == 0) {
             // A is positive
-            return I64 { bits: a.bits + b }
+            assert!(a.bits <= MAX_I64_AS_U64 - b, SIGNED_MATH_ADD_OVERFLOW);
+            return normalize(I64 { bits: a.bits + b })
         } else {
             // A is negative
-            if (a.bits - (1 << 63) <= b) return I64 { bits: b - (a.bits - (1 << 63)) }; // Return positive
-            return I64 { bits: a.bits - b } // Return negative
+            let a_abs = a.bits - (1 << 63);
+            if (a_abs <= b) {
+                // Result becomes positive
+                let diff = b - a_abs;
+                assert!(diff <= MAX_I64_AS_U64, SIGNED_MATH_ADD_OVERFLOW);
+                return normalize(I64 { bits: diff });
+            };
+            return normalize(I64 { bits: a.bits - b }) // Return negative
         }
     }
 
@@ -121,32 +149,44 @@ module thala_signed_math::i64 {
         if (a.bits >> 63 == 0) {
             // A is positive
             if (a.bits >= b) return I64 { bits: a.bits - b }; // Return positive
-            return I64 { bits: (1 << 63) | (b - a.bits) } // Return negative
+            let diff = b - a.bits;
+            assert!(diff <= MAX_I64_AS_U64, SIGNED_MATH_SUB_UNDERFLOW);
+            return normalize(I64 { bits: (1 << 63) | diff })
         } else {
             // A is negative
-            return I64 { bits: a.bits + b } // Return negative
+            assert!(b <= MAX_U64 - a.bits, SIGNED_MATH_SUB_UNDERFLOW);
+            return normalize(I64 { bits: a.bits + b }) // Return negative
         }
     }
 
     /// @notice Multiply `a * b`.
     public fun mul(a: &I64, b: u64): I64 {
-        if (a.bits >> 63 == 0) {
+        let is_neg = a.bits >> 63 == 1;
+        let a_abs = if (is_neg) a.bits - (1 << 63) else a.bits;
+
+        assert!(
+            a_abs == 0 || b <= MAX_I64_AS_U64 / a_abs,
+            SIGNED_MATH_MUL_OVERFLOW
+        );
+
+        if (!is_neg) {
             // A is positive
-            return I64 { bits: a.bits * b } // Return positive
+            return normalize(I64 { bits: a.bits * b }) // Return positive
         } else {
             // A is negative
-            return I64 { bits: (1 << 63) | (b * (a.bits - (1 << 63))) } // Return negative
+            return normalize(I64 { bits: (1 << 63) | (b * a_abs) }) // Return negative
         }
     }
 
     /// @notice Divide `a / b`.
     public fun div(a: &I64, b: u64): I64 {
+        assert!(b != 0, SIGNED_MATH_DIVIDE_BY_ZERO);
         if (a.bits >> 63 == 0) {
             // A is positive
-            return I64 { bits: a.bits / b } // Return positive
+            return normalize(I64 { bits: a.bits / b }) // Return positive
         } else {
             // A is negative
-            return I64 { bits: (1 << 63) | ((a.bits - (1 << 63)) / b) } // Return negative
+            return normalize(I64 { bits: (1 << 63) | ((a.bits - (1 << 63)) / b) }) // Return negative
         }
     }
 
@@ -156,21 +196,23 @@ module thala_signed_math::i64 {
             // A is positive
             if (b.bits >> 63 == 0) {
                 // B is positive
-                return I64 { bits: a.bits + b.bits }
+                assert!(a.bits <= MAX_I64_AS_U64 - b.bits, SIGNED_MATH_ADD_OVERFLOW);
+                return normalize(I64 { bits: a.bits + b.bits })
             } else {
                 // B is negative
                 if (b.bits - (1 << 63) <= a.bits) return I64 { bits: a.bits - (b.bits - (1 << 63)) }; // Return positive
-                return I64 { bits: b.bits - a.bits } // Return negative
+                return normalize(I64 { bits: b.bits - a.bits }) // Return negative
             }
         } else {
             // A is negative
             if (b.bits >> 63 == 0) {
                 // B is positive
                 if (a.bits - (1 << 63) <= b.bits) return I64 { bits: b.bits - (a.bits - (1 << 63)) }; // Return positive
-                return I64 { bits: a.bits - b.bits } // Return negative
+                return normalize(I64 { bits: a.bits - b.bits }) // Return negative
             } else {
                 // B is negative
-                return I64 { bits: a.bits + (b.bits - (1 << 63)) }
+                assert!(a.bits - (1 << 63) <= MAX_I64_AS_U64 - (b.bits - (1 << 63)), SIGNED_MATH_SUB_UNDERFLOW);
+                return normalize(I64 { bits: a.bits + (b.bits - (1 << 63)) })
             }
         }
     }
@@ -181,67 +223,83 @@ module thala_signed_math::i64 {
             // A is positive
             if (b.bits >> 63 == 0) {
                 // B is positive
-                if (a.bits >= b.bits) return I64 { bits: a.bits - b.bits }; // Return positive
-                return I64 { bits: (1 << 63) | (b.bits - a.bits) } // Return negative
+                if (a.bits >= b.bits) return normalize(I64 { bits: a.bits - b.bits }); // Return positive
+                return normalize(I64 { bits: (1 << 63) | (b.bits - a.bits) }) // Return negative
             } else {
                 // B is negative
-                return I64 { bits: a.bits + (b.bits - (1 << 63)) } // Return negative
+                assert!(a.bits <= MAX_I64_AS_U64 - (b.bits - (1 << 63)), SIGNED_MATH_ADD_OVERFLOW);
+                return normalize(I64 { bits: a.bits + (b.bits - (1 << 63)) }) // Return negative
             }
         } else {
             // A is negative
             if (b.bits >> 63 == 0) {
                 // B is positive
-                return I64 { bits: a.bits + b.bits } // Return negative
+                assert!(b.bits <= MAX_I64_AS_U64 - (a.bits - (1 << 63)), SIGNED_MATH_SUB_UNDERFLOW);
+                return normalize(I64 { bits: a.bits + b.bits }) // Return negative
             } else {
                 // B is negative
-                if (b.bits >= a.bits) return I64 { bits: b.bits - a.bits }; // Return positive
-                return I64 { bits: a.bits - (b.bits - (1 << 63)) } // Return negative
+                if (b.bits >= a.bits) return normalize(I64 { bits: b.bits - a.bits }); // Return positive
+                return normalize(I64 { bits: a.bits - (b.bits - (1 << 63)) }) // Return negative
             }
         }
     }
 
     /// @notice Multiply `a * b`.
     public fun mul_i64(a: &I64, b: &I64): I64 {
+        let a_neg = a.bits >> 63 == 1;
+        let b_neg = b.bits >> 63 == 1;
+
+        let a_abs = if (a_neg) a.bits - (1 << 63) else a.bits;
+        let b_abs = if (b_neg) b.bits - (1 << 63) else b.bits;
+
+        // Prevent overflow: a_abs * b_abs must fit in MAX_I64_AS_U64
+        assert!(
+            a_abs == 0 || b_abs <= MAX_I64_AS_U64 / a_abs,
+            SIGNED_MATH_MUL_OVERFLOW
+        );
+
         if (a.bits >> 63 == 0) {
             // A is positive
             if (b.bits >> 63 == 0) {
                 // B is positive
-                return I64 { bits: a.bits * b.bits } // Return positive
+                return normalize(I64 { bits: a.bits * b.bits }) // Return positive
             } else {
                 // B is negative
-                return I64 { bits: (1 << 63) | (a.bits * (b.bits - (1 << 63))) } // Return negative
+                return normalize(I64 { bits: (1 << 63) | (a.bits * (b.bits - (1 << 63))) }) // Return negative
             }
         } else {
             // A is negative
             if (b.bits >> 63 == 0) {
                 // B is positive
-                return I64 { bits: (1 << 63) | (b.bits * (a.bits - (1 << 63))) } // Return negative
+                return normalize(I64 { bits: (1 << 63) | (b.bits * (a.bits - (1 << 63))) }) // Return negative
             } else {
                 // B is negative
-                return I64 { bits: (a.bits - (1 << 63)) * (b.bits - (1 << 63)) } // Return positive
+                return normalize(I64 { bits: (a.bits - (1 << 63)) * (b.bits - (1 << 63)) }) // Return positive
             }
         }
     }
 
     /// @notice Divide `a / b`.
     public fun div_i64(a: &I64, b: &I64): I64 {
+        assert!(compare(b, &from_u64(0)) != EQUAL, SIGNED_MATH_DIVIDE_BY_ZERO);
+
         if (a.bits >> 63 == 0) {
             // A is positive
             if (b.bits >> 63 == 0) {
                 // B is positive
-                return I64 { bits: a.bits / b.bits } // Return positive
+                return normalize(I64 { bits: a.bits / b.bits }) // Return positive
             } else {
                 // B is negative
-                return I64 { bits: (1 << 63) | (a.bits / (b.bits - (1 << 63))) } // Return negative
+                return normalize(I64 { bits: (1 << 63) | (a.bits / (b.bits - (1 << 63))) }) // Return negative
             }
         } else {
             // A is negative
             if (b.bits >> 63 == 0) {
                 // B is positive
-                return I64 { bits: (1 << 63) | ((a.bits - (1 << 63)) / b.bits) } // Return negative
+                return normalize(I64 { bits: (1 << 63) | ((a.bits - (1 << 63)) / b.bits) }) // Return negative
             } else {
                 // B is negative
-                return I64 { bits: (a.bits - (1 << 63)) / (b.bits - (1 << 63)) } // Return positive
+                return normalize(I64 { bits: (a.bits - (1 << 63)) / (b.bits - (1 << 63)) }) // Return positive
             }
         }
     }
@@ -265,6 +323,7 @@ module thala_signed_math::i64 {
     fun test_compare() {
         assert!(compare(&from_u64(123), &from_u64(123)) == EQUAL, 0);
         assert!(compare(&neg_from_u64(123), &neg_from_u64(123)) == EQUAL, 0);
+        assert!(compare(&neg_from_u64(0), &zero()) == EQUAL, 0); // compare "normalized" values
         assert!(compare(&from_u64(234), &from_u64(123)) == GREATER_THAN, 0);
         assert!(compare(&from_u64(123), &from_u64(234)) == LESS_THAN, 0);
         assert!(compare(&neg_from_u64(234), &neg_from_u64(123)) == LESS_THAN, 0);
@@ -281,6 +340,20 @@ module thala_signed_math::i64 {
         assert!(add(&neg_from_u64(123), 234) == from_u64(111), 0);
 
         assert!(add(&neg_from_u64(123), 123) == zero(), 0);
+
+        assert!(add(&zero(), 0) == zero(), 0);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_ADD_OVERFLOW)]
+    fun test_add_overflow_from_positive() {
+        add(&from_u64(2), MAX_I64_AS_U64 - 1);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_ADD_OVERFLOW)]
+    fun test_add_overflow_from_negative() {
+        add(&neg_from_u64(2), MAX_I64_AS_U64 + 3);
     }
 
     #[test]
@@ -290,18 +363,54 @@ module thala_signed_math::i64 {
         assert!(sub(&neg_from_u64(123), 234) == neg_from_u64(357), 0);
 
         assert!(sub(&from_u64(123), 123) == zero(), 0);
+
+        assert!(sub(&zero(), 0) == zero(), 0);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_SUB_UNDERFLOW)]
+    fun test_sub_underflow_from_positive() {
+        sub(&from_u64(2), MAX_I64_AS_U64 + 3);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_SUB_UNDERFLOW)]
+    fun test_sub_underflow_from_negative() {
+        sub(&neg_from_u64(2), MAX_I64_AS_U64 - 1);
     }
 
     #[test]
     fun test_mul() {
         assert!(mul(&from_u64(123), 234) == from_u64(28782), 0);
         assert!(mul(&neg_from_u64(123), 234) == neg_from_u64(28782), 0);
+
+        assert!(mul(&zero(), 0) == zero(), 0);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_MUL_OVERFLOW)]
+    fun test_mul_overflow_from_positive() {
+        mul(&from_u64(2), MAX_I64_AS_U64 - 1);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_MUL_OVERFLOW)]
+    fun test_mul_overflow_from_negative() {
+        mul(&neg_from_u64(2), MAX_I64_AS_U64 - 1);
     }
 
     #[test]
     fun test_div() {
         assert!(div(&from_u64(28781), 123) == from_u64(233), 0);
         assert!(div(&neg_from_u64(28781), 123) == neg_from_u64(233), 0);
+
+        assert!(div(&zero(), 1) == zero(), 0);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_DIVIDE_BY_ZERO)]
+    fun test_div_by_zero() {
+        div(&from_u64(1), 0);
     }
 
     #[test]
@@ -315,6 +424,20 @@ module thala_signed_math::i64 {
 
         assert!(add_i64(&from_u64(123), &neg_from_u64(123)) == zero(), 0);
         assert!(add_i64(&neg_from_u64(123), &from_u64(123)) == zero(), 0);
+
+        assert!(add_i64(&neg_from_u64(0), &from_u64(0)) == zero(), 0);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_ADD_OVERFLOW)]
+    fun test_add_i64_overflow_from_positive() {
+        add_i64(&from_u64(2), &from_u64(MAX_I64_AS_U64 - 1));
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_SUB_UNDERFLOW)]
+    fun test_add_i64_underflow_from_negative() {
+        add_i64(&neg_from_u64(2), &neg_from_u64(MAX_I64_AS_U64 - 1));
     }
 
     #[test]
@@ -328,6 +451,20 @@ module thala_signed_math::i64 {
 
         assert!(sub_i64(&from_u64(123), &from_u64(123)) == zero(), 0);
         assert!(sub_i64(&neg_from_u64(123), &neg_from_u64(123)) == zero(), 0);
+
+        assert!(sub_i64(&neg_from_u64(0), &from_u64(0)) == zero(), 0);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_SUB_UNDERFLOW)]
+    fun test_sub_i64_underflow_from_negative() {
+        sub_i64(&neg_from_u64(2), &from_u64(MAX_I64_AS_U64 - 1));
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_ADD_OVERFLOW)]
+    fun test_sub_i64_overflow_from_negative() {
+        sub_i64(&from_u64(2), &neg_from_u64(MAX_I64_AS_U64 - 1));
     }
 
     #[test]
@@ -336,6 +473,20 @@ module thala_signed_math::i64 {
         assert!(mul_i64(&from_u64(123), &neg_from_u64(234)) == neg_from_u64(28782), 0);
         assert!(mul_i64(&neg_from_u64(123), &from_u64(234)) == neg_from_u64(28782), 0);
         assert!(mul_i64(&neg_from_u64(123), &neg_from_u64(234)) == from_u64(28782), 0);
+
+        assert!(mul_i64(&neg_from_u64(0), &from_u64(0)) == zero(), 0);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_MUL_OVERFLOW)]
+    fun test_mul_i64_overflow_from_positive() {
+        mul_i64(&from_u64(2), &from_u64(MAX_I64_AS_U64 - 1));
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_MUL_OVERFLOW)]
+    fun test_mul_i64_overflow_from_negative() {
+        mul_i64(&neg_from_u64(2), &neg_from_u64(MAX_I64_AS_U64 - 1));
     }
 
     #[test]
@@ -344,6 +495,14 @@ module thala_signed_math::i64 {
         assert!(div_i64(&from_u64(28781), &neg_from_u64(123)) == neg_from_u64(233), 0);
         assert!(div_i64(&neg_from_u64(28781), &from_u64(123)) == neg_from_u64(233), 0);
         assert!(div_i64(&neg_from_u64(28781), &neg_from_u64(123)) == from_u64(233), 0);
+
+        assert!(div_i64(&neg_from_u64(0), &from_u64(1)) == zero(), 0);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = SIGNED_MATH_DIVIDE_BY_ZERO)]
+    fun test_div_i64_by_zero() {
+        div_i64(&from_u64(1), &from_u64(0));
     }
 
     /// Less than
