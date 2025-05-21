@@ -319,6 +319,11 @@ module thala_signed_math::i64 {
         GREATER_THAN
     }
 
+    #[view]
+    public fun max_i64_as_u64(): u64 {
+        MAX_I64_AS_U64
+    }
+
     #[test]
     fun test_compare() {
         assert!(compare(&from_u64(123), &from_u64(123)) == EQUAL, 0);
