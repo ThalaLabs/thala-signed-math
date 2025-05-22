@@ -293,11 +293,8 @@ module thala_signed_math::i128 {
         assert!(mod(&from(26), 5) == 1, 0);
         assert!(mod(&from(29), 5) == 4, 0);
         assert!(mod(&from(30), 5) == 0, 0);
-
         assert!(mod(&from(0), 1) == 0, 0);
-
         assert!(mod(&neg_from(0), 5) == 0, 0);
-
         assert!(mod(&neg_from(1), 5) == 4, 0);
     }
 }

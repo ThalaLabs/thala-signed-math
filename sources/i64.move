@@ -304,6 +304,26 @@ module thala_signed_math::i64 {
         }
     }
 
+    /// Computes `x % y`, where x is an I64 and y is a u64.
+    /// Returns the result as a u64.
+    ///
+    /// - x: Signed value (can be negative)
+    /// - y: Positive modulus (unsigned)
+    public fun mod(x: &I64, y: u64): u64 {
+        // alternative implementation of "mod" uses the equation: a - (b * (a / b))
+        let quotient = div(x, y);
+        let product = mul(&quotient, y);
+        let remainder = sub_i64(x, &product);
+
+        if (is_neg(&remainder)) {
+            // Normalize negative mod: (remainder + y) % y
+            // result = y - abs(r)
+            y - (to_u64(&abs(&remainder)))
+        } else {
+            to_u64(&remainder)
+        }
+    }
+
     #[view]
     public fun equal(): u8 {
         EQUAL
@@ -508,6 +528,17 @@ module thala_signed_math::i64 {
     #[expected_failure(abort_code = SIGNED_MATH_DIVIDE_BY_ZERO)]
     fun test_div_i64_by_zero() {
         div_i64(&from_u64(1), &from_u64(0));
+    }
+
+    #[test]
+    fun test_mod() {
+        assert!(mod(&from_u64(25), 5) == 0, 0);
+        assert!(mod(&from_u64(26), 5) == 1, 0);
+        assert!(mod(&from_u64(29), 5) == 4, 0);
+        assert!(mod(&from_u64(30), 5) == 0, 0);
+        assert!(mod(&from_u64(0), 1) == 0, 0);
+        assert!(mod(&neg_from_u64(0), 5) == 0, 0);
+        assert!(mod(&neg_from_u64(1), 5) == 4, 0);
     }
 
     /// Less than
