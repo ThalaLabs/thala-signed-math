@@ -195,6 +195,27 @@ module thala_signed_math::i128 {
         }
     }
 
+    /// Computes `x % y`, where x is an I128 and y is a U128.
+    /// Returns the result as a u128.
+    ///
+    /// - x: Signed value (can be negative)
+    /// - y: Positive modulus (unsigned)
+    public fun mod(x: &I128, y: u128): u128 {
+        // alternative implementation of "mod" uses the equation: a - (b * (a / b))
+        let y_i128 = from(y);
+        let quotient = div(x, &y_i128);
+        let product = mul(&quotient, &y_i128);
+        let remainder = sub(x, &product);
+
+        if (is_neg(&remainder)) {
+            // Normalize negative mod: (remainder + y) % y
+            // result = y - abs(r)
+            y - (as_u128(&abs(&remainder)))
+        } else {
+            as_u128(&remainder)
+        }
+    }
+
     #[view]
     public fun equal(): u8 {
         EQUAL
@@ -264,5 +285,16 @@ module thala_signed_math::i128 {
         assert!(div(&from(28781), &neg_from(123)) == neg_from(233), 0);
         assert!(div(&neg_from(28781), &from(123)) == neg_from(233), 0);
         assert!(div(&neg_from(28781), &neg_from(123)) == from(233), 0);
+    }
+
+    #[test]
+    fun test_mod() {
+        assert!(mod(&from(25), 5) == 0, 0);
+        assert!(mod(&from(26), 5) == 1, 0);
+        assert!(mod(&from(29), 5) == 4, 0);
+        assert!(mod(&from(30), 5) == 0, 0);
+        assert!(mod(&from(0), 1) == 0, 0);
+        assert!(mod(&neg_from(0), 5) == 0, 0);
+        assert!(mod(&neg_from(1), 5) == 4, 0);
     }
 }
